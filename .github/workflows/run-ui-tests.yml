@@ -23,11 +23,14 @@ jobs:
             runIde: |
               export DISPLAY=:99.0
               Xvfb -ac :99 -screen 0 1920x1080x16 &
-              gradle runIdeForUiTests &
+              ./gradlew runIdeForUiTests &
+            testCmd: ./gradlew test
           - os: windows-latest
             runIde: start gradlew.bat runIdeForUiTests
+            testCmd: gradlew.bat test
           - os: macos-latest
             runIde: ./gradlew runIdeForUiTests &
+            testCmd: ./gradlew test
 
     steps:
 
@@ -41,6 +44,11 @@ jobs:
         with:
           distribution: zulu
           java-version: 21
+
+      # Ensure Gradle Wrapper is executable on Unix runners
+      - name: Make Gradle Wrapper executable
+        if: runner.os != 'Windows'
+        run: chmod +x gradlew
 
       # Setup Gradle
       - name: Setup Gradle
@@ -59,9 +67,18 @@ jobs:
         uses: jtalk/url-health-check-action@v4
         with:
           url: http://127.0.0.1:8082
-          max-attempts: 15
-          retry-delay: 30s
+          max-attempts: 30
+          retry-delay: 20s
 
       # Run tests
       - name: Tests
-        run: ./gradlew test
+        run: ${{ matrix.testCmd }}
+
+      # On failure, collect IDE logs to help diagnose why the robot server didn't start
+      - name: Upload IDE logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: idea-logs-${{ matrix.os }}
+          path: |
+            build/idea-sandbox/system/log/**
