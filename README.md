@@ -36,7 +36,19 @@ Available commands:
 - ```/model set -<parameter> <value>``` - Configures model inference parameters
 - ```/host <host>``` - Sets the Ollama host (host `default` is `http://localhost:11434`)
 
+MCP integration (optional):
+
+- When an MCP server is configured, Jarvis exposes its tools to the model. The model can request a tool call when needed and Jarvis will execute it and incorporate the result into the reply.
+- Configure the MCP endpoint with: `/mcp host <wsUrl>` (e.g., `ws://localhost:5173/mcp`).
+- Power users can still use `/mcp tools` and `/mcp call` explicitly if desired.
+
 When using reasoning models with Ollama, Jarvis shows their internal thoughts in an expandable section at the top of each answer.
+
+Auto-detecting JetBrains MCP Server:
+
+- If the JetBrains "MCP Server" plugin is installed and running, Jarvis attempts to auto-detect the server at common endpoints (e.g., `ws://127.0.0.1:5173/mcp`).
+- You can also set an environment variable `JETBRAINS_MCP_WS_URL` to the WebSocket endpoint, and Jarvis will use it automatically.
+- If auto-detection fails, configure it explicitly via `/mcp host <wsUrl>`.
 
 ## License
 

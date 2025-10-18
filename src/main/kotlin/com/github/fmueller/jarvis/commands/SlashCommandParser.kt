@@ -55,6 +55,28 @@ object SlashCommandParser {
             return CopyCommand()
         }
 
+        // MCP subcommands
+        if (trimmedMessage.startsWith("/mcp ")) {
+            val withoutPrefix = trimmed.removePrefix("/mcp ")
+            val parts = withoutPrefix.trim().split(" ", limit = 2)
+            val sub = parts.firstOrNull()?.lowercase() ?: ""
+            return when (sub) {
+                "host" -> {
+                    val host = parts.getOrNull(1)?.trim() ?: ""
+                    McpHostCommand(host)
+                }
+                "tools" -> McpToolsCommand()
+                "call" -> {
+                    val rest = parts.getOrNull(1)?.trim() ?: ""
+                    val callParts = rest.split(" ", limit = 2)
+                    val toolName = callParts.firstOrNull()?.trim().orEmpty()
+                    val argsJson = callParts.getOrNull(1)?.trim().orEmpty()
+                    McpCallCommand(toolName, argsJson)
+                }
+                else -> ChatCommand()
+            }
+        }
+
         return ChatCommand()
     }
 }

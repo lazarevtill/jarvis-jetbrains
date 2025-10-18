@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+- feat: add basic MCP client commands (`/mcp host`, `/mcp tools`, `/mcp call`) to discover and call tools from an MCP server (e.g., JetBrains MCP Server plugin). No additional dependencies required; uses OkHttp WebSocket and Kotlin serialization.
+- feat: integrate MCP tools into chat flow. When MCP is configured, the model can request a tool via a TOOL_CALL directive; Jarvis executes the tool and incorporates the result automatically.
+
 ### Added
 
 - Remove caches for closed pull requests in CI

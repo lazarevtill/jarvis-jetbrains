@@ -48,4 +48,19 @@ class SlashCommandParserTest : TestCase() {
         val command = SlashCommandParser.parse("/copy")
         assertTrue(command is CopyCommand)
     }
+
+    fun `test parse mcp host returns McpHostCommand`() {
+        val command = SlashCommandParser.parse("/mcp host ws://localhost:5173/mcp")
+        assertTrue(command is McpHostCommand)
+    }
+
+    fun `test parse mcp tools returns McpToolsCommand`() {
+        val command = SlashCommandParser.parse("/mcp tools")
+        assertTrue(command is McpToolsCommand)
+    }
+
+    fun `test parse mcp call returns McpCallCommand`() {
+        val command = SlashCommandParser.parse("/mcp call myTool {\"k\":\"v\"}")
+        assertTrue(command is McpCallCommand)
+    }
 }

@@ -55,6 +55,9 @@ data class Message(
             - ```/model <modelName>``` - Changes the model to use (`default` is `qwen3:1.7b`)
             - ```/model``` or ```/model-info``` - Shows the info card of the current model
             - ```/host <host>``` - Sets the Ollama host (`default` is `http://localhost:11434`)
+            - ```/mcp host <wsUrl>``` - Sets the MCP server WebSocket URL (e.g., `ws://localhost:5173/mcp`)
+            - ```/mcp tools``` - Lists available tools from the MCP server
+            - ```/mcp call <toolName> {jsonArgs}``` - Calls an MCP tool with optional JSON args
             """.trimIndent()
         )
 

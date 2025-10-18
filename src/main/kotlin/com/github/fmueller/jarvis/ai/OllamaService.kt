@@ -14,9 +14,12 @@ import dev.langchain4j.service.TokenStream
 import kotlinx.coroutines.*
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import com.github.fmueller.jarvis.mcp.McpService
 import org.jetbrains.annotations.VisibleForTesting
 import java.net.URI
 import java.net.http.HttpRequest
@@ -381,6 +384,17 @@ object OllamaService {
             ""
         }
 
+        val toolsSpec = McpService.toolsForModelSpec()
+        val hasTools = !toolsSpec.isNullOrBlank()
+        val toolsSection = if (hasTools) """
+                |
+                |[Tools]:
+                |
+                |$toolsSpec
+                |
+                """.trimMargin()
+            else ""
+
         val nextMessagePrompt = conversation.getLastUserMessage()?.let {
             lastUserMessage ->
                 """
@@ -390,60 +404,112 @@ object OllamaService {
                 |
                 |${getCodeContextPrompt(lastUserMessage.codeContext, !lastUserMessage.isHelpMessage() && useCodeContext)}
                 |
+                |$toolsSection
                 |[Assistant]: """.trimMargin()
         } ?: "Tell me that there was no message provided."
 
-        val responseInFlight = StringBuilder()
-        try {
-            suspendCancellableCoroutine { continuation ->
-                val tokenStream = assistant
-                    .chat(nextMessagePrompt)
-                    .onPartialResponse { update ->
-                        responseInFlight.append(update)
-                        conversation.addToMessageBeingGenerated(update)
-                    }
-                    .onCompleteResponse { response ->
-                        continuation.resumeWith(Result.success(response.aiMessage().text().trim()))
-                    }
-                    .onError { error ->
-                        if (!continuation.isCancelled) {
-                            val errorMessage = StringBuilder()
-                                .appendLine()
-                                .appendLine()
-                                .appendLine("An error occurred while processing the message.")
-                                .appendLine()
-                                .append("Error: ")
-                                .append(error.message ?: "Unknown error")
-                                .toString()
-                            conversation.addToMessageBeingGenerated(errorMessage)
-                        }
-                        cancelCurrentRequest()
-                        continuation.cancel(Exception(error.message))
-                    }
-
-                continuation.invokeOnCancellation {
-                    cancelCurrentRequest()
-                }
-
-                tokenStream.start()
-            }
-        } catch (e: Exception) {
-            val errorMessage = StringBuilder()
-                .appendLine()
-                .appendLine()
-                .appendLine("An error occurred while processing the message.")
-                .appendLine()
-                .append("Error: ")
-                .append(e.message)
-                .toString()
-
-            val job = currentCoroutineContext()[Job]
-            if (job?.isCancelled == false) {
-                conversation.addToMessageBeingGenerated(errorMessage)
-            }
-
-            responseInFlight.append(errorMessage).toString().trim()
+        if (!hasTools) {
+            return@withContext runChatStreamToUi(nextMessagePrompt, conversation)
         }
+
+        // With tools available: first pass collect-only to detect tool calls
+        val firstResponse = runChatCollectOnly(nextMessagePrompt)
+        val maybeTool = parseToolCall(firstResponse)
+        if (maybeTool != null) {
+            val (toolName, argsJson) = maybeTool
+            val toolResult = McpService.callToolMarkdown(toolName, argsJson)
+
+            val followUpPrompt = """
+                |$nextMessagePrompt
+                |
+                |[Tool Request]:
+                |$toolName $argsJson
+                |
+                |[Tool Result]:
+                |${toolResult.trim()}
+                |
+                |[Assistant]:
+            """.trimMargin()
+
+            // Second pass: stream final answer to UI
+            return@withContext runChatStreamToUi(followUpPrompt, conversation)
+        }
+
+        // No tool call requested; stream the already generated text to UI before returning
+        // (keep UX consistent by showing the answer as if it streamed)
+        conversation.addToMessageBeingGenerated(firstResponse)
+        firstResponse.trim()
+    }
+
+    private fun parseToolCall(text: String): Pair<String, String>? {
+        val trimmed = text.trim()
+        val prefix = "TOOL_CALL:"
+        if (!trimmed.startsWith(prefix)) {
+            return null
+        }
+        val jsonPart = trimmed.removePrefix(prefix).trim()
+        return try {
+            val obj = Json.parseToJsonElement(jsonPart).jsonObject
+            val name = (obj["name"] as? JsonPrimitive)?.content ?: return null
+            val args = obj["arguments"]?.toString() ?: "{}"
+            name to args
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    private suspend fun runChatCollectOnly(prompt: String): String = suspendCancellableCoroutine { continuation ->
+        val responseInFlight = StringBuilder()
+        val tokenStream = assistant
+            .chat(prompt)
+            .onPartialResponse { update ->
+                responseInFlight.append(update)
+            }
+            .onCompleteResponse { response ->
+                continuation.resumeWith(Result.success(response.aiMessage().text().trim()))
+            }
+            .onError { error ->
+                cancelCurrentRequest()
+                continuation.cancel(Exception(error.message))
+            }
+
+        continuation.invokeOnCancellation {
+            cancelCurrentRequest()
+        }
+        tokenStream.start()
+    }
+
+    private suspend fun runChatStreamToUi(prompt: String, conversation: Conversation): String = suspendCancellableCoroutine { continuation ->
+        val responseInFlight = StringBuilder()
+        val tokenStream = assistant
+            .chat(prompt)
+            .onPartialResponse { update ->
+                responseInFlight.append(update)
+                conversation.addToMessageBeingGenerated(update)
+            }
+            .onCompleteResponse { response ->
+                continuation.resumeWith(Result.success(response.aiMessage().text().trim()))
+            }
+            .onError { error ->
+                if (!continuation.isCancelled) {
+                    val errorMessage = StringBuilder()
+                        .appendLine()
+                        .appendLine()
+                        .appendLine("An error occurred while processing the message.")
+                        .appendLine()
+                        .append("Error: ")
+                        .append(error.message ?: "Unknown error")
+                        .toString()
+                    conversation.addToMessageBeingGenerated(errorMessage)
+                }
+                cancelCurrentRequest()
+                continuation.cancel(Exception(error.message))
+            }
+
+        continuation.invokeOnCancellation {
+            cancelCurrentRequest()
+        }
+        tokenStream.start()
     }
 
     private fun getCodeContextPrompt(codeContext: CodeContext?, useCodeContext: Boolean): String {
