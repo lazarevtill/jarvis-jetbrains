@@ -7,9 +7,12 @@
 ## About
 
 <!-- Plugin description -->
-Jarvis is an LLM-powered developer plugin for the JetBrains IDE platform. It aims to support developers by leveraging
-local LLMs only. To achieve this, it is integrating with Ollama. Jarvis keeps the currently used model in memory for
-five minutes to reduce loading times.
+Jarvis is an LLM-powered developer plugin for JetBrains IDEs. It focuses on local-first AI by integrating with
+Ollama and keeps the active model in memory for five minutes to reduce loading times.
+
+Optionally, Jarvis can leverage tools exposed by an MCP (Model Context Protocol) server. When the JetBrains "MCP
+Server" plugin is installed and running, Jarvis auto-detects it and makes its tools available directly in chat so the
+model can request and use them during a conversation.
 <!-- Plugin description end -->
 
 ## Installation
