@@ -4,8 +4,10 @@ import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
+import kotlinx.serialization.builtins.ListSerializer
 import okhttp3.*
 import okio.ByteString
 import java.util.concurrent.CountDownLatch
@@ -36,11 +38,14 @@ class McpClient(private val json: Json = defaultJson) {
             params = null
         )
         val resp = sendAndAwait(wsUrl, req)
-        val result = resp?.result ?: return emptyList()
-        val tools = result["tools"]
-        return tools?.let {
-            json.decodeFromJsonElement(McpToolsWrapper.serializer(), result).tools
-        } ?: emptyList()
+        val resultMap = resp?.result ?: return emptyList()
+        val resultElement = JsonObject(resultMap)
+        val toolsElement = resultElement["tools"] ?: return emptyList()
+        return try {
+            json.decodeFromJsonElement(ListSerializer(McpTool.serializer()), toolsElement)
+        } catch (_: Exception) {
+            emptyList()
+        }
     }
 
     /**
@@ -57,9 +62,10 @@ class McpClient(private val json: Json = defaultJson) {
             params = params
         )
         val resp = sendAndAwait(wsUrl, req)
-        val result = resp?.result ?: return null
+        val resultMap = resp?.result ?: return null
+        val resultElement = JsonObject(resultMap)
         return try {
-            json.decodeFromJsonElement(McpToolCallResponse.serializer(), result).result
+            json.decodeFromJsonElement(McpToolCallResult.serializer(), resultElement)
         } catch (_: Exception) {
             null
         }
@@ -155,13 +161,7 @@ data class McpToolCallResult(
 )
 
 @Serializable
-data class McpToolCallResponse(
-    val result: McpToolCallResult
-)
-
-@Serializable
 data class McpContent(
     val type: String,
     val text: String? = null
 )
-
