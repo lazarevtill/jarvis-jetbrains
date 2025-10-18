@@ -136,21 +136,26 @@ object McpService {
                 System.getenv("MCP_SERVER_URL")
             ).filterNotNull().map { it.trim() }.filter { it.startsWith("ws://") || it.startsWith("wss://") }
 
-            val defaultCandidates = sequenceOf(
-                "ws://127.0.0.1:5173/mcp",
-                "ws://localhost:5173/mcp",
-                // JetBrains built-in webserver often uses 63342, include as a fallback
-                "ws://127.0.0.1:63342/mcp",
-                "ws://localhost:63342/mcp"
-            )
+            val ports = listOf(5173, 63342, 17080, 18080, 8080)
+            val paths = listOf("/mcp", "/mcp/ws", "/mcp/websocket")
+            val defaultCandidates = sequence {
+                for (host in listOf("127.0.0.1", "localhost")) {
+                    for (p in ports) {
+                        for (path in paths) {
+                            yield("ws://$host:$p$path")
+                        }
+                    }
+                }
+            }
 
             val candidates = (envCandidates + defaultCandidates).toList()
             for (candidate in candidates) {
                 try {
-                    // A successful round-trip is sufficient to accept this endpoint
-                    client.listTools(candidate)
-                    wsUrl = candidate
-                    break
+                    val tools = client.listTools(candidate)
+                    if (tools.isNotEmpty()) {
+                        wsUrl = candidate
+                        break
+                    }
                 } catch (_: Exception) {
                     // try next
                 }

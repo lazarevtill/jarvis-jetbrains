@@ -12,6 +12,8 @@ import okhttp3.*
 import okio.ByteString
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.CompletableFuture
+import java.util.concurrent.ConcurrentHashMap
 
 /**
  * Minimal JSON-RPC 2.0 client over WebSocket for interacting with MCP servers.
@@ -32,19 +34,41 @@ class McpClient(private val json: Json = defaultJson) {
      * List available tools via `tools/list`.
      */
     fun listTools(wsUrl: String): List<McpTool> {
-        val req = JsonRpcRequest(
-            id = 1,
-            method = "tools/list",
-            params = null
-        )
-        val resp = sendAndAwait(wsUrl, req)
-        val resultMap = resp?.result ?: return emptyList()
-        val resultElement = JsonObject(resultMap)
-        val toolsElement = resultElement["tools"] ?: return emptyList()
+        val session = RpcWebSocketSession(wsUrl, json)
         return try {
-            json.decodeFromJsonElement(ListSerializer(McpTool.serializer()), toolsElement)
-        } catch (_: Exception) {
-            emptyList()
+            // Initialize handshake (required by MCP)
+            session.request(
+                JsonRpcRequest(
+                    id = 1,
+                    method = "initialize",
+                    params = buildJsonObject {
+                        put("protocolVersion", "2024-11-05")
+                        put("capabilities", buildJsonObject { })
+                        put("clientInfo", buildJsonObject {
+                            put("name", "Jarvis JetBrains")
+                            put("version", "dev")
+                        })
+                    }
+                )
+            )
+
+            val resp = session.request(
+                JsonRpcRequest(
+                    id = 2,
+                    method = "tools/list",
+                    params = null
+                )
+            )
+            val resultMap = resp?.result ?: return emptyList()
+            val resultElement = JsonObject(resultMap)
+            val toolsElement = resultElement["tools"] ?: return emptyList()
+            try {
+                json.decodeFromJsonElement(ListSerializer(McpTool.serializer()), toolsElement)
+            } catch (_: Exception) {
+                emptyList()
+            }
+        } finally {
+            session.close()
         }
     }
 
@@ -52,68 +76,93 @@ class McpClient(private val json: Json = defaultJson) {
      * Call a specific tool via `tools/call` with provided arguments.
      */
     fun callTool(wsUrl: String, name: String, arguments: JsonElement?): McpToolCallResult? {
-        val params = buildJsonObject {
-            put("name", name)
-            arguments?.let { put("arguments", it) }
-        }
-        val req = JsonRpcRequest(
-            id = 1,
-            method = "tools/call",
-            params = params
-        )
-        val resp = sendAndAwait(wsUrl, req)
-        val resultMap = resp?.result ?: return null
-        val resultElement = JsonObject(resultMap)
+        val session = RpcWebSocketSession(wsUrl, json)
         return try {
-            json.decodeFromJsonElement(McpToolCallResult.serializer(), resultElement)
-        } catch (_: Exception) {
-            null
-        }
-    }
+            // Initialize first
+            session.request(
+                JsonRpcRequest(
+                    id = 1,
+                    method = "initialize",
+                    params = buildJsonObject {
+                        put("protocolVersion", "2024-11-05")
+                        put("capabilities", buildJsonObject { })
+                        put("clientInfo", buildJsonObject {
+                            put("name", "Jarvis JetBrains")
+                            put("version", "dev")
+                        })
+                    }
+                )
+            )
 
-    private fun sendAndAwait(wsUrl: String, request: JsonRpcRequest): JsonRpcResponse? {
-        val okClient = OkHttpClient.Builder().build()
-        val listener = SingleResponseWebSocketListener(json)
-        val req = Request.Builder().url(wsUrl).build()
-        val ws = okClient.newWebSocket(req, listener)
-        try {
-            val payload = json.encodeToString(JsonRpcRequest.serializer(), request)
-            ws.send(payload)
-            listener.await()
-            return listener.response
+            val params = buildJsonObject {
+                put("name", name)
+                arguments?.let { put("arguments", it) }
+            }
+            val resp = session.request(
+                JsonRpcRequest(
+                    id = 2,
+                    method = "tools/call",
+                    params = params
+                )
+            )
+            val resultMap = resp?.result ?: return null
+            val resultElement = JsonObject(resultMap)
+            try {
+                json.decodeFromJsonElement(McpToolCallResult.serializer(), resultElement)
+            } catch (_: Exception) {
+                null
+            }
         } finally {
-            ws.close(1000, null)
+            session.close()
         }
     }
 }
 
-private class SingleResponseWebSocketListener(private val json: Json) : WebSocketListener() {
-    private val latch = CountDownLatch(1)
-    @Volatile
-    var response: JsonRpcResponse? = null
-        private set
+private class RpcWebSocketSession(wsUrl: String, private val json: Json) : WebSocketListener() {
+    private val okClient = OkHttpClient.Builder().build()
+    private val requests = ConcurrentHashMap<Int, CompletableFuture<JsonRpcResponse>>()
+    private val ws: WebSocket
 
-    fun await(timeoutSeconds: Long = 10): Boolean {
-        return latch.await(timeoutSeconds, TimeUnit.SECONDS)
+    init {
+        val req = Request.Builder().url(wsUrl).build()
+        ws = okClient.newWebSocket(req, this)
+    }
+
+    fun request(request: JsonRpcRequest): JsonRpcResponse? {
+        val future = CompletableFuture<JsonRpcResponse>()
+        requests[request.id] = future
+        val payload = json.encodeToString(JsonRpcRequest.serializer(), request)
+        ws.send(payload)
+        return try {
+            future.get(15, TimeUnit.SECONDS)
+        } catch (_: Exception) {
+            null
+        } finally {
+            requests.remove(request.id)
+        }
+    }
+
+    fun close() {
+        try {
+            ws.close(1000, null)
+        } catch (_: Exception) {
+        }
     }
 
     override fun onMessage(webSocket: WebSocket, text: String) {
         try {
             val msg = json.decodeFromString(JsonRpcResponse.serializer(), text)
-            response = msg
+            val id = msg.id
+            if (id != null) {
+                requests[id]?.complete(msg)
+            }
         } catch (_: Exception) {
-            // ignore non-JSON-RPC messages
-        } finally {
-            latch.countDown()
+            // ignore
         }
     }
 
     override fun onMessage(webSocket: WebSocket, bytes: ByteString) {
         onMessage(webSocket, bytes.utf8())
-    }
-
-    override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-        latch.countDown()
     }
 }
 
